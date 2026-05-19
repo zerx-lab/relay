@@ -61,7 +61,7 @@ jobs:
       - name: Install golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.0
+          version: v2.12
 
       - run: pnpm install --frozen-lockfile
 
