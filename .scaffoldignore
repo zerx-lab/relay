@@ -1,0 +1,11 @@
+# Paths to strip when materializing this repo as a scaffold via `zerx new`.
+# One pattern per line; matched against the path *inside* the extracted tree
+# (relative, forward slashes). A trailing "/" means "this directory and
+# everything under it". A leading "/" is implicit (patterns are anchored).
+#
+# Keep this list tight: only the CLI itself and scaffold-only metadata.
+cmd/zerx/
+internal/scaffold/
+.scaffoldignore
+.goreleaser.yaml
+.github/workflows/release.yml

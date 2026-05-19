@@ -1,0 +1,91 @@
+# Release pipeline for the `zerx` scaffold CLI.
+#
+# Trigger: pushing a tag like v0.1.0 (semver) on any branch. The workflow:
+#   1. Reruns the acceptance gate (`task verify`) so we never release a
+#      tag that wouldn't pass CI on main.
+#   2. Hands off to GoReleaser, which:
+#        - builds cross-platform zerx binaries (see .goreleaser.yaml)
+#        - creates the GitHub release with checksums + archives attached
+#        - marks the release as "latest" so `zerx new` (which hits
+#          /releases/latest) picks it up immediately.
+#
+# Note on `go install ...@latest`: Go's module proxy resolves @latest off
+# the semver tag itself, not off this workflow. So as soon as you push the
+# tag, `go install github.com/zerx-lab/relay/cmd/zerx@latest` will find
+# the new version even before this workflow finishes. The workflow exists
+# to provide pre-built binaries and the GitHub release that `zerx new`
+# needs at runtime.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # GoReleaser needs to create the GitHub release.
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Tags + full history so changelog generation has something to
+          # compare against.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          # Track the toolchain pinned in go.mod (currently 1.26.3).
+          go-version-file: go.mod
+          cache: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          # Match packageManager in package.json.
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.0
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: task verify
+        run: task verify
+
+  release:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

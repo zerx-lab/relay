@@ -1,0 +1,62 @@
+# GoReleaser config for the `zerx` scaffold CLI.
+#
+# Scope: this file only describes how to ship the CLI binary. The Electron
+# app itself is packaged by Forge (`task build`) — wiring its makers into
+# GoReleaser would mix two unrelated release pipelines.
+#
+# Triggered by .github/workflows/release.yml on `git push` of a v* tag.
+version: 2
+
+project_name: zerx
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: zerx
+    main: ./cmd/zerx
+    binary: zerx
+    env:
+      - CGO_ENABLED=0
+    # Match the runtime targets we actually expect users to install on.
+    # Adding more is cheap; trimming later is annoying because old releases
+    # would lose assets.
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+
+archives:
+  - id: zerx
+    formats: [tar.gz]
+    # Windows users expect zip files.
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    # Stable naming so install scripts can predict URLs.
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    # Keep release notes signal-heavy by default.
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "Merge pull request"
+
+release:
+  # Mark the GitHub release as the latest (so `zerx new` without --ref
+  # resolves to it via /releases/latest).
+  make_latest: "true"
+  draft: false
+  prerelease: auto
