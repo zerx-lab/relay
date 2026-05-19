@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:*" />
+    <title>Relay</title>
+    <style>
+      :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+      body { margin: 0; padding: 2rem; max-width: 720px; }
+      h1 { margin-top: 0; }
+      .card { padding: 1rem 1.25rem; border-radius: 8px; background: color-mix(in srgb, currentColor 6%, transparent); margin-bottom: 1rem; }
+      label { display: block; font-size: 0.85rem; opacity: 0.7; margin-bottom: 0.25rem; }
+      pre { margin: 0; white-space: pre-wrap; word-break: break-all; }
+      input, button { font: inherit; padding: 0.4rem 0.6rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Relay Electron + Go scaffold</h1>
+
+    <div class="card">
+      <label>Backend handshake</label>
+      <pre id="handshake">loading…</pre>
+    </div>
+
+    <div class="card">
+      <label>GET /health</label>
+      <pre id="health">loading…</pre>
+    </div>
+
+    <div class="card">
+      <label>GET /greet/{name}</label>
+      <input id="greet-name" value="relay" />
+      <button id="greet-btn">Send</button>
+      <pre id="greet-out"></pre>
+    </div>
+
+    <script type="module" src="./renderer.ts"></script>
+  </body>
+</html>
