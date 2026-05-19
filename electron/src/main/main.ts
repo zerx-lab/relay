@@ -13,6 +13,9 @@ declare const MAIN_WINDOW_VITE_NAME: string;
 app.setName("relay");
 
 let backend: Backend | null = null;
+// Tracks the in-flight or resolved backend so the handshake IPC can await it
+// without blocking window creation. Replaced atomically on hot restart.
+let backendPromise: Promise<Backend> | null = null;
 let reloading = false;
 
 const RELOAD_FILE = join(app.getAppPath(), ".dev-reload");
@@ -37,7 +40,11 @@ async function reloadBackend() {
   const oldBackend = backend;
   try {
     process.stderr.write("[dev] restarting Go sidecar...\n");
-    const next = await startBackend();
+    const nextPromise = startBackend();
+    // Publish the in-flight promise immediately so any handshake IPC arriving
+    // during the restart awaits the new sidecar rather than the dying one.
+    backendPromise = nextPromise;
+    const next = await nextPromise;
     backend = next;
     oldBackend?.stop();
     process.stderr.write(`[dev] sidecar up on ${next.handshake.baseUrl}\n`);
@@ -45,6 +52,9 @@ async function reloadBackend() {
       win.webContents.reloadIgnoringCache();
     }
   } catch (err) {
+    // Roll back to the still-alive previous sidecar so subsequent handshake
+    // IPCs don't await the rejected promise forever.
+    if (oldBackend) backendPromise = Promise.resolve(oldBackend);
     process.stderr.write(
       `[dev] restart failed (keeping previous sidecar): ${String(err)}\n`,
     );
@@ -145,15 +155,28 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  backend = await startBackend();
+  // Spawn the Go sidecar in parallel with window creation. Without this,
+  // the taskbar icon lights up (via app.setName + .desktop StartupWMClass)
+  // but the user stares at empty space for ~0.5-1s while we wait on the
+  // sidecar's handshake JSON. The renderer's handshake IPC awaits the same
+  // promise, so any API call still blocks until the backend is ready —
+  // matching the contract documented in api/client.ts.
+  backendPromise = startBackend();
+  backendPromise.then(
+    (b) => {
+      backend = b;
+    },
+    (err) => {
+      process.stderr.write(`[boot] backend failed to start: ${String(err)}\n`);
+    },
+  );
 
-  // Expose the handshake to the renderer through an IPC channel. Preload
-  // calls this synchronously on startup; the renderer never sees Node APIs.
-  // Re-reads `backend` on every call so post-reload renderers get the
-  // fresh port/token.
-  ipcMain.handle("relay:handshake", () => {
-    if (!backend) throw new Error("backend not started");
-    return backend.handshake;
+  // Re-reads `backendPromise` on every call so post-reload renderers get the
+  // fresh port/token. The renderer never sees Node APIs.
+  ipcMain.handle("relay:handshake", async () => {
+    if (!backendPromise) throw new Error("backend not started");
+    const b = await backendPromise;
+    return b.handshake;
   });
 
   installDevReloader();
