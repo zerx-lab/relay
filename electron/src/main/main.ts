@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, nativeImage } from "electron";
-import { type FSWatcher, watch as fsWatch, statSync } from "node:fs";
+import { type FSWatcher, watch as fsWatch } from "node:fs";
+import { stat as fsStat } from "node:fs/promises";
 import { join } from "node:path";
 import { startBackend, type Backend } from "./backend";
 
@@ -29,18 +30,24 @@ const RELOAD_FILE = join(app.getAppPath(), ".dev-reload");
 async function reloadBackend() {
   if (reloading) return;
   reloading = true;
+  // Start the new sidecar BEFORE killing the old one. If the new binary
+  // fails to hand-shake (panic, port bind failure, parse error), the old
+  // one stays alive and the renderer keeps working — failing dev should
+  // not break a running session.
+  const oldBackend = backend;
   try {
     process.stderr.write("[dev] restarting Go sidecar...\n");
-    backend?.stop();
-    backend = await startBackend();
-    process.stderr.write(
-      `[dev] sidecar up on ${backend.handshake.baseUrl}\n`,
-    );
+    const next = await startBackend();
+    backend = next;
+    oldBackend?.stop();
+    process.stderr.write(`[dev] sidecar up on ${next.handshake.baseUrl}\n`);
     for (const win of BrowserWindow.getAllWindows()) {
       win.webContents.reloadIgnoringCache();
     }
   } catch (err) {
-    process.stderr.write(`[dev] restart failed: ${String(err)}\n`);
+    process.stderr.write(
+      `[dev] restart failed (keeping previous sidecar): ${String(err)}\n`,
+    );
   } finally {
     reloading = false;
   }
@@ -60,19 +67,31 @@ function installDevReloader() {
   const dir = app.getAppPath();
   let lastMtimeMs = 0;
   let fsWatcher: FSWatcher;
+
+  // Async to avoid blocking the main thread on stat() (slow on Windows
+  // with antivirus or network drives). fs.watch's `filename` argument is
+  // documented as possibly null on some platforms (older Linux kernels,
+  // network filesystems), so we don't filter on it — we stat unconditionally
+  // and dedupe by mtime.
+  const onEvent = async () => {
+    let mtimeMs: number;
+    try {
+      ({ mtimeMs } = await fsStat(RELOAD_FILE));
+    } catch {
+      return; // trigger file not yet present, or vanished between events
+    }
+    if (mtimeMs === lastMtimeMs) return;
+    lastMtimeMs = mtimeMs;
+    void reloadBackend();
+  };
+
   try {
     fsWatcher = fsWatch(dir, { persistent: false }, (_event, filename) => {
-      if (filename !== ".dev-reload") return;
-      // Coalesce duplicate events (rename+change on Windows, two changes on
-      // Linux atomic writes) by debouncing on mtime.
-      try {
-        const { mtimeMs } = statSync(RELOAD_FILE);
-        if (mtimeMs === lastMtimeMs) return;
-        lastMtimeMs = mtimeMs;
-      } catch {
-        return; // file vanished between event and stat
-      }
-      void reloadBackend();
+      // Soft filter: if the platform reports filename (Linux/macOS/Windows
+      // all do in modern Node), skip work for unrelated changes. When
+      // filename is null we still stat to be safe.
+      if (filename != null && filename !== ".dev-reload") return;
+      void onEvent();
     });
   } catch (err) {
     process.stderr.write(
