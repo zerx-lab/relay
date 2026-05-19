@@ -1,6 +1,5 @@
 import type { ForgeConfig } from "@electron-forge/shared-types";
 import { MakerZIP } from "@electron-forge/maker-zip";
-import { MakerDeb } from "@electron-forge/maker-deb";
 import { VitePlugin } from "@electron-forge/plugin-vite";
 import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
 import { FusesPlugin } from "@electron-forge/plugin-fuses";
@@ -19,15 +18,7 @@ const config: ForgeConfig = {
     extraResource: ["./bin", "./assets/logo"],
   },
   rebuildConfig: {},
-  makers: [
-    new MakerZIP({}, ["darwin", "linux", "win32"]),
-    new MakerDeb({
-      options: {
-        icon: "./assets/logo/png/relay-512.png",
-        categories: ["Development", "Utility"],
-      },
-    }),
-  ],
+  makers: [new MakerZIP({}, ["darwin", "linux", "win32"])],
   plugins: [
     new AutoUnpackNativesPlugin({}),
     new VitePlugin({

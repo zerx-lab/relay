@@ -113,7 +113,13 @@ tasks:
       - rm -f .dev-reload
 
   build:
-    desc: Produce a distributable Electron package with the Go sidecar bundled
+    desc: Produce an unpacked Electron app (out/<app>-<platform>-<arch>/) with the Go sidecar bundled
+    deps: [build:go, codegen, typecheck, icons]
+    cmds:
+      - pnpm run package
+
+  make:
+    desc: Produce distributable installers/archives via Electron Forge makers
     deps: [build:go, codegen, typecheck, icons]
     cmds:
       - pnpm run make
