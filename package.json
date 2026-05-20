@@ -2,6 +2,7 @@
   "name": "relay",
   "version": "0.1.0",
   "description": "Relay desktop scaffold: Go (Huma) backend + Electron renderer with end-to-end typed API.",
+  "author": "zerx-lab",
   "private": true,
   "main": ".vite/build/main.js",
   "scripts": {
