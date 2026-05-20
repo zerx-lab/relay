@@ -1,5 +1,7 @@
 import type { ForgeConfig } from "@electron-forge/shared-types";
 import { MakerZIP } from "@electron-forge/maker-zip";
+import { MakerSquirrel } from "@electron-forge/maker-squirrel";
+import { MakerAppImage } from "@reforged/maker-appimage";
 import { VitePlugin } from "@electron-forge/plugin-vite";
 import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
 import { FusesPlugin } from "@electron-forge/plugin-fuses";
@@ -18,7 +20,32 @@ const config: ForgeConfig = {
     extraResource: ["./bin", "./assets/logo"],
   },
   rebuildConfig: {},
-  makers: [new MakerZIP({}, ["darwin", "linux", "win32"])],
+  // Per-platform makers. Electron Forge invokes each maker only on its
+  // declared platforms, so a single `task make` run on a given OS produces
+  // exactly the artifacts that OS can build.
+  //
+  //   linux   -> AppImage (single self-contained executable)
+  //   win32   -> Squirrel.Windows (RELEASES + .nupkg + Setup.exe; auto-update capable)
+  //   darwin  -> ZIP (no signing identity wired in yet)
+  //
+  // ZIP is also kept as a portable fallback on linux/win32.
+  makers: [
+    new MakerAppImage({
+      options: {
+        // Forge auto-discovers icon/categories from `extraResource` + package.json,
+        // but being explicit avoids surprises across maker versions.
+        icon: "./assets/logo/png/relay-512.png",
+        categories: ["Utility"],
+      },
+    }),
+    new MakerSquirrel({
+      // `name` becomes the Squirrel app id; must be a valid file/dir token.
+      name: "relay",
+      // setupIcon requires .ico; we only ship PNGs today, so fall back to
+      // Forge's default until an .ico is added under assets/logo/.
+    }),
+    new MakerZIP({}, ["darwin", "linux", "win32"]),
+  ],
   plugins: [
     new AutoUnpackNativesPlugin({}),
     new VitePlugin({
