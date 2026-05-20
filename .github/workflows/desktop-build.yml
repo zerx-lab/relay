@@ -44,7 +44,12 @@ jobs:
         include:
           - os: ubuntu-latest
             label: linux-x64
-          - os: windows-latest
+          # Pin to windows-2022 (Server 2022) instead of windows-latest because
+          # electron-winstaller's bundled Squirrel.exe shells out to 7z.exe and
+          # fails on the windows-latest -> windows-2025 transition with
+          # "The system cannot find the file specified". Revisit once
+          # electron-winstaller ships a build that works on Server 2025.
+          - os: windows-2022
             label: win32-x64
     runs-on: ${{ matrix.os }}
     steps:
