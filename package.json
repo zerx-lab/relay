@@ -13,6 +13,11 @@
     "codegen": "openapi-typescript openapi.yaml -o electron/src/api/schema.ts"
   },
   "packageManager": "pnpm@10.33.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron-winstaller"
+    ]
+  },
   "devDependencies": {
     "@biomejs/biome": "2.4.15",
     "@electron-forge/cli": "^7.11.1",
