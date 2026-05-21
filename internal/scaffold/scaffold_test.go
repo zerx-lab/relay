@@ -165,6 +165,20 @@ Exec=relay %U
 Icon=relay
 StartupWMClass=relay
 `,
+		"forge.config.ts": `import { MakerSquirrel } from "@electron-forge/maker-squirrel";
+const config = {
+  makers: [
+    new MakerSquirrel({
+      name: "relay",
+    }),
+  ],
+  plugins: [
+    new VitePlugin({
+      renderer: [{ name: "main_window", config: "" }],
+    }),
+  ],
+};
+`,
 		// Files that must NOT be touched.
 		"AGENTS.md":                    "the relay desktop scaffold\n",
 		"assets/logo/relay-bridge.svg": `<svg><!-- relay --></svg>`,
@@ -195,6 +209,11 @@ StartupWMClass=relay
 	assertContains(t, filepath.Join(dir, "assets/relay.desktop"), `Exec=myapp %U`)
 	assertContains(t, filepath.Join(dir, "assets/relay.desktop"), `StartupWMClass=myapp`)
 	assertContains(t, filepath.Join(dir, "assets/relay.desktop"), `Icon=relay`) // kept
+
+	// forge.config.ts: MakerSquirrel name rewritten; unrelated `name:` for
+	// the Vite renderer plugin entry is left alone.
+	assertContains(t, filepath.Join(dir, "forge.config.ts"), `name: "myapp",`)
+	assertContains(t, filepath.Join(dir, "forge.config.ts"), `name: "main_window"`)
 
 	// Prose/comments untouched.
 	assertContains(t, filepath.Join(dir, "AGENTS.md"), "the relay desktop scaffold")

@@ -209,6 +209,19 @@ func identityRules(id Identity) []rewriteRule {
 			pathPred: goFile,
 		},
 
+		// --- Electron Forge maker config ---
+		// Squirrel.Windows maker `name` becomes the Windows app id used by
+		// auto-update + the installer's directory name. The literal `name:
+		// "relay"` appears only inside the `new MakerSquirrel({ ... })` call
+		// in forge.config.ts (the other `name` fields there — plugin entry
+		// names like `"main_window"` — don't carry the value `"relay"`), so a
+		// file-scoped literal swap is safe.
+		{
+			old:      `name: "relay",`,
+			new:      `name: "` + lower + `",`,
+			pathPred: exact("forge.config.ts"),
+		},
+
 		// --- .desktop file body ---
 		// File NAME stays "relay.desktop" by user choice. Inside, the
 		// Exec / Icon / StartupWMClass fields must agree with app.setName
