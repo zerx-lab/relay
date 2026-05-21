@@ -4,6 +4,18 @@ import { stat as fsStat } from "node:fs/promises";
 import { join } from "node:path";
 import { startBackend, type Backend } from "./backend";
 
+// Boot trace: emit labelled deltas to stderr when RELAY_BOOT_TRACE=1. Used to
+// measure cold-start phase distribution without shipping the noise to users.
+const bootTraceEnabled = process.env.RELAY_BOOT_TRACE === "1";
+const bootTraceStart = Date.now();
+function bootTrace(label: string) {
+  if (!bootTraceEnabled) return;
+  process.stderr.write(
+    `[trace:main] ${label} +${(Date.now() - bootTraceStart).toFixed(0)}ms\n`,
+  );
+}
+bootTrace("module-load");
+
 // These globals are injected by @electron-forge/plugin-vite at build time.
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
@@ -19,6 +31,35 @@ let backendPromise: Promise<Backend> | null = null;
 let reloading = false;
 
 const RELOAD_FILE = join(app.getAppPath(), ".dev-reload");
+
+// Spawn the Go sidecar as early as possible — at module load, BEFORE
+// app.whenReady() resolves. The Go binary is independent of Electron init, so
+// running them in parallel shaves ~100ms off the time-to-first-API-call on a
+// cold start. `ipcMain.handle` is a JS-only event emitter and can be set up
+// here too; the renderer cannot call it until its WebContents exist anyway.
+//
+// Errors are captured so the handler can re-raise them once a renderer asks
+// — we never want a rejected promise to be left dangling unhandled.
+backendPromise = startBackend();
+bootTrace("backend-spawned");
+backendPromise.then(
+  (b) => {
+    backend = b;
+    bootTrace("backend-handshake");
+  },
+  (err) => {
+    process.stderr.write(`[boot] backend failed to start: ${String(err)}\n`);
+  },
+);
+
+// Re-reads `backendPromise` on every call so post-reload renderers get the
+// fresh port/token. The renderer never sees Node APIs.
+ipcMain.handle("relay:handshake", async () => {
+  if (!backendPromise) throw new Error("backend not started");
+  const b = await backendPromise;
+  bootTrace("handshake-ipc-resolved");
+  return b.handshake;
+});
 
 /**
  * Dev-only hot restart triggered when scripts/dev-watcher.mjs touches the
@@ -143,6 +184,15 @@ async function createWindow() {
     },
   });
 
+  // Note on perceived startup: we deliberately do NOT use the textbook
+  // `show: false` + 'ready-to-show' pattern. On Wayland that event can fire
+  // many hundreds of ms after loadFile/loadURL resolves (it waits for a
+  // compositor-side "showable" signal), which makes the user wait *longer*
+  // before seeing the window than the default behaviour does. With the
+  // default (`show: true`), Electron maps the window once the renderer has
+  // produced its first paint; because `index.html` ships inline CSS and
+  // "loading…" placeholders, that first paint already shows the real layout
+  // — there is no white-flash to hide. Verified with RELAY_BOOT_TRACE=1.
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     await win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
   } else {
@@ -155,33 +205,14 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  // Spawn the Go sidecar in parallel with window creation. Without this,
-  // the taskbar icon lights up (via app.setName + .desktop StartupWMClass)
-  // but the user stares at empty space for ~0.5-1s while we wait on the
-  // sidecar's handshake JSON. The renderer's handshake IPC awaits the same
-  // promise, so any API call still blocks until the backend is ready —
-  // matching the contract documented in api/client.ts.
-  backendPromise = startBackend();
-  backendPromise.then(
-    (b) => {
-      backend = b;
-    },
-    (err) => {
-      process.stderr.write(`[boot] backend failed to start: ${String(err)}\n`);
-    },
-  );
-
-  // Re-reads `backendPromise` on every call so post-reload renderers get the
-  // fresh port/token. The renderer never sees Node APIs.
-  ipcMain.handle("relay:handshake", async () => {
-    if (!backendPromise) throw new Error("backend not started");
-    const b = await backendPromise;
-    return b.handshake;
-  });
-
+  bootTrace("app-ready");
+  // Sidecar + IPC handler were registered at module load (above) so they
+  // run in parallel with Electron's own init. Here we only need work that
+  // genuinely requires `ready`: creating windows, dev reload watcher.
   installDevReloader();
 
   await createWindow();
+  bootTrace("window-loaded");
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

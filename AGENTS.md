@@ -55,6 +55,16 @@ Go struct → openapi.yaml → schema.ts → client.ts → renderer
 
 所有编排走 `Taskfile.yml`，不要在文档/脚本里直接调 `pnpm` 或 `go`。命令清单用 `task --list` 查。
 
+## 启动性能
+
+冷启时间分布在 packaged 模式下实测约 550ms（双击 → window-loaded）：~30% Electron 自身 init、~35% module-load 到 app-ready、~30% createWindow → loadFile。**Go sidecar 整个冷启 ~5ms，不是瓶颈**，因此别再尝试用裸 socket / 平台原生 HTTP 栈替代 `net/http`——会撕掉 OpenAPI 契约链路、收益接近 0。
+
+主进程在 module top-level **同步** spawn sidecar 并 `ipcMain.handle("relay:handshake", …)`，不要把这两步搬回 `app.whenReady()`：sidecar 与 Electron 自身 init 并行能省 ~100ms Go-ready 时间、~20ms 用户感知。`startBackend()` 只用 `app.isPackaged` / `app.getAppPath()`，两者在 ready 前可调用；`ipcMain.handle` 是纯 JS event emitter。
+
+`BrowserWindow` 不要套 `show: false` + `ready-to-show`。文档常见做法在 **Wayland 上反而拖慢窗口出现 500–700ms**（compositor "showable" 信号晚到）。`index.html` 已经 inline CSS + "loading…" 占位符，默认 `show: true` 的 first-paint 就是有内容的，没有白屏可隐藏。
+
+调试启动延迟用 `RELAY_BOOT_TRACE=1 ./out/<...>/relay`（dev: `RELAY_BOOT_TRACE=1 task dev`）——main process 会向 stderr 打印 `[trace:main]` 时间戳，覆盖 `module-load → backend-spawned → backend-handshake → app-ready → handshake-ipc-resolved → window-loaded`。trace 代码在 `electron/src/main/main.ts`，env 未设时是 no-op。
+
 ## 依赖策略
 
 不要手改版本号。用 `go get pkg@latest` / `pnpm add pkg` 让工具挑版本，提交生成的 `go.sum` / `pnpm-lock.yaml`。若 peer dependency 强制非最新主版本，用 `pnpm view pkg@<major> version` 找该主版本最高兼容版，以 `pnpm add pkg@^<major>` 锁定。
