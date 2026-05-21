@@ -6,6 +6,70 @@ import { VitePlugin } from "@electron-forge/plugin-vite";
 import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
 import { FusesPlugin } from "@electron-forge/plugin-fuses";
 import { FuseV1Options, FuseVersion } from "@electron/fuses";
+import { promises as fs } from "node:fs";
+import { join } from "node:path";
+
+// Locales we keep in the packaged app. Chromium *requires* en-US.pak as a
+// fallback even if the UI is in another language — removing it breaks string
+// lookups and shows boxes. zh-CN.pak covers the project's primary audience.
+// To add a locale: drop its <lang>.pak name in here, no other change needed.
+const KEEP_LOCALES = new Set(["en-US.pak", "zh-CN.pak"]);
+
+// Electron Packager `afterExtract` hook: runs once Electron has been unpacked
+// into the output dir, BEFORE app code is copied in. This is the right place
+// to delete bundled-Electron files (locales, license dumps) because we're
+// editing the Electron distribution itself, not our app's resources.
+//
+// Layout by platform (buildPath points at the dir below):
+//   linux/win32  buildPath/locales/*.pak              buildPath/LICENSES.chromium.html
+//   darwin       buildPath/Electron.app/Contents/Frameworks/Electron Framework.framework/
+//                Versions/A/Resources/*.pak           and a LICENSES.chromium.html sibling
+//
+// We probe both layouts and silently skip whichever doesn't exist.
+async function trimElectronExtras(buildPath: string): Promise<void> {
+  const localesCandidates = [
+    join(buildPath, "locales"),
+    join(
+      buildPath,
+      "Electron.app",
+      "Contents",
+      "Frameworks",
+      "Electron Framework.framework",
+      "Versions",
+      "A",
+      "Resources",
+    ),
+  ];
+  for (const dir of localesCandidates) {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(dir);
+    } catch {
+      continue;
+    }
+    await Promise.all(
+      entries
+        .filter((n) => n.endsWith(".pak") && !KEEP_LOCALES.has(n))
+        .map((n) => fs.rm(join(dir, n), { force: true })),
+    );
+  }
+
+  // LICENSES.chromium.html is a ~20 MB legal-attribution dump that Chromium
+  // ships next to the binary. Attribution still lives in the repo LICENSE
+  // and can be surfaced via an About dialog when one is built — there's no
+  // legal need to keep it at the app root as a giant HTML file.
+  const licenseCandidates = [
+    join(buildPath, "LICENSES.chromium.html"),
+    join(
+      buildPath,
+      "Electron.app",
+      "Contents",
+      "Frameworks",
+      "LICENSES.chromium.html",
+    ),
+  ];
+  await Promise.all(licenseCandidates.map((p) => fs.rm(p, { force: true })));
+}
 
 // Forge config for the Relay Electron shell.
 //
@@ -18,6 +82,17 @@ const config: ForgeConfig = {
     // `icon` is base path; packager appends .png/.ico/.icns per platform.
     icon: "./assets/logo/png/relay-512",
     extraResource: ["./bin", "./assets/logo"],
+    // Strip ~65 MB of unused locale .pak files and the 20 MB Chromium
+    // license dump from the packaged app. See trimElectronExtras above.
+    afterExtract: [
+      (buildPath, _electronVersion, _platform, _arch, callback) => {
+        trimElectronExtras(buildPath).then(
+          () => callback(),
+          (err: unknown) =>
+            callback(err instanceof Error ? err : new Error(String(err))),
+        );
+      },
+    ],
   },
   rebuildConfig: {},
   // Per-platform makers. Electron Forge invokes each maker only on its

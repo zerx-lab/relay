@@ -24,6 +24,33 @@ declare const MAIN_WINDOW_VITE_NAME: string;
 // The installed `relay.desktop` matches on StartupWMClass=relay.
 app.setName("relay");
 
+// Chromium command-line tuning. MUST run before app.whenReady() resolves
+// because these flags are read when the GPU/utility processes spawn.
+//
+// - `CalculateNativeWinOcclusion` is a Windows-only background-window tracker
+//   that adds 200-300ms to first paint on cold start. We never minimize-to-tray
+//   so the occlusion data is unused.
+// - `Vulkan` is force-disabled because the bundled libvk_swiftshader fallback
+//   crashes the GPU process on Wayland sessions ("'--ozone-platform=wayland'
+//   is not compatible with Vulkan"), causing a ~500ms retry storm before
+//   Chromium falls back to GLES. Verified locally with RELAY_BOOT_TRACE=1.
+app.commandLine.appendSwitch(
+  "disable-features",
+  "CalculateNativeWinOcclusion,Vulkan",
+);
+// Keeps the renderer at full priority when the window is occluded/minimized.
+// We're a single-window app; throttling background renderers buys us nothing
+// and delays the first post-show interaction.
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+// Skips Chromium's "is this the default browser?" probe on first launch.
+app.commandLine.appendSwitch("no-default-browser-check");
+
+if (process.platform === "linux") {
+  // Let Electron pick Wayland natively when the session is Wayland, instead
+  // of going through XWayland. Matters for HiDPI scaling and IME latency.
+  app.commandLine.appendSwitch("ozone-platform-hint", "auto");
+}
+
 let backend: Backend | null = null;
 // Tracks the in-flight or resolved backend so the handshake IPC can await it
 // without blocking window creation. Replaced atomically on hot restart.

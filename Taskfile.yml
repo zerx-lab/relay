@@ -124,6 +124,17 @@ tasks:
     cmds:
       - pnpm run make
 
+  build:arch:
+    desc: Produce an Arch Linux pacman package (.pkg.tar.zst) under out/make/arch/
+    # No Electron Forge maker for pacman exists today (到2026, the @reforged
+    # suite covers AppImage/Flatpak/Snap but not pacman). We generate a
+    # PKGBUILD on the fly that wraps the unpacked app from `task build` and
+    # hand it to makepkg. See scripts/make-arch.sh for the why.
+    platforms: [linux]
+    deps: [build]
+    cmds:
+      - bash scripts/make-arch.sh
+
   # ---- Icons / desktop integration ----
   #
   # Wayland compositors don't accept window-pixmap icons the way X11 does. The

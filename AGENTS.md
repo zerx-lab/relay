@@ -37,6 +37,7 @@ Go struct → openapi.yaml → schema.ts → client.ts → renderer
 - `/openapi.yaml` — Go ↔ TS 的契约检查点，入库提交。
 - `/bin/<os>-<arch>/relay-backend[.exe]` — sidecar 产物。`<arch>` 使用 **Node 命名**（`x64`/`arm64`/`ia32`），不是 Go 的（`amd64`/`386`）；运行时 `backend.ts` 用 `process.arch` 解析目录，Taskfile 负责映射。
 - `/scripts/dev-watcher.mjs` — dev-only Go 文件 watcher。`task dev` 用 `concurrently` 并行起它和 Electron。
+- `/scripts/make-arch.sh` — `task build:arch` 调用的 pacman 打包脚本；生成 PKGBUILD + 调 makepkg，详见下文“发行包格式”。
 
 ## Dev 热重启
 
@@ -57,13 +58,31 @@ Go struct → openapi.yaml → schema.ts → client.ts → renderer
 
 ## 启动性能
 
-冷启时间分布在 packaged 模式下实测约 550ms（双击 → window-loaded）：~30% Electron 自身 init、~35% module-load 到 app-ready、~30% createWindow → loadFile。**Go sidecar 整个冷启 ~5ms，不是瓶颈**，因此别再尝试用裸 socket / 平台原生 HTTP 栈替代 `net/http`——会撕掉 OpenAPI 契约链路、收益接近 0。
+冷启时间分布在 packaged 模式下实测约 350–550ms（双击 → window-loaded）。**Go sidecar 整个冷启 ~5ms，不是瓶颈**，因此别再尝试用裸 socket / 平台原生 HTTP 栈替代 `net/http`——会撕掉 OpenAPI 契约链路、收益接近 0。
 
 主进程在 module top-level **同步** spawn sidecar 并 `ipcMain.handle("relay:handshake", …)`，不要把这两步搬回 `app.whenReady()`：sidecar 与 Electron 自身 init 并行能省 ~100ms Go-ready 时间、~20ms 用户感知。`startBackend()` 只用 `app.isPackaged` / `app.getAppPath()`，两者在 ready 前可调用；`ipcMain.handle` 是纯 JS event emitter。
 
 `BrowserWindow` 不要套 `show: false` + `ready-to-show`。文档常见做法在 **Wayland 上反而拖慢窗口出现 500–700ms**（compositor "showable" 信号晚到）。`index.html` 已经 inline CSS + "loading…" 占位符，默认 `show: true` 的 first-paint 就是有内容的，没有白屏可隐藏。
 
+`main.ts` 在 `app.setName` 之后、`app.whenReady()` 之前批量 `app.commandLine.appendSwitch` 设置 Chromium 开关：`disable-features=CalculateNativeWinOcclusion,Vulkan`（前者 Win-only 省 200–300ms，后者修 Wayland GPU process fatal crash 与 ~500ms swiftshader fallback 重试）、`disable-renderer-backgrounding`、`no-default-browser-check`，Linux 上额外 `ozone-platform-hint=auto`。新增开关一律放这一段，**不要**写进 `app.whenReady()` 回调——GPU/utility 子进程在那之前就已经 fork。
+
 调试启动延迟用 `RELAY_BOOT_TRACE=1 ./out/<...>/relay`（dev: `RELAY_BOOT_TRACE=1 task dev`）——main process 会向 stderr 打印 `[trace:main]` 时间戳，覆盖 `module-load → backend-spawned → backend-handshake → app-ready → handshake-ipc-resolved → window-loaded`。trace 代码在 `electron/src/main/main.ts`，env 未设时是 no-op。
+
+## 打包瘦身
+
+`forge.config.ts` 的 `packagerConfig.afterExtract` hook 在 Electron 解压后、app 拷入前删两类文件：locales 只保留 `KEEP_LOCALES` 集合里的 `.pak`（默认 `en-US.pak`、`zh-CN.pak`，Chromium 强依赖 en-US 别删），以及 `LICENSES.chromium.html`（~20 MB 法务 dump）。Linux x64 打包从 316 MB 降到 251 MB。
+
+要加新语言：往 `KEEP_LOCALES` 加 `<lang>.pak` 即可，hook 自己处理 linux/win32 和 darwin 两种布局。**不要**在这一层删 `libffmpeg.so`/`libvulkan*.so`——它们看着是死代码，但删了某些 codec 探测和 GPU init 路径会 fatal。
+
+## 发行包格式
+
+Forge maker 产出（`task make`）：AppImage（Linux）、Squirrel.Windows（Win）、ZIP（三平台备用）。Forge 生态里**没有 pacman maker**（到 2026：`@reforged/maker-pacman` 不存在，`@electron-forge/maker-pkgbuild` 也不存在），所以 Arch 走独立路径：`task build:arch` → `scripts/make-arch.sh`。
+
+脚本拿 `task build` 产出的 `out/relay-linux-<node-arch>/` 当预编译产物，现生成 PKGBUILD（`package()` 只拷贝不编译，跟 electron-builder 同路子），调 `makepkg` 出 `out/make/arch/relay-<version>-1-<pkg-arch>.pkg.tar.zst`。布局：`/opt/relay/`（全套）、`/usr/bin/relay` 软链、`/usr/share/applications/relay.desktop`、`/usr/share/icons/hicolor/<size>/apps/relay.png`。
+
+陷阱：`chrome-sandbox` 必须 `chmod 4755`（setuid root），否则 Electron 启动报“SUID sandbox helper binary was found, but is not configured correctly”；PKGBUILD 里 `options=('!strip' '!debug')` 是必须的，让 makepkg 别去动 Electron 的 `.so`，否则会破 ASAR integrity。要改依赖清单改 `depends=()`；pacman arch 名跟 Node arch 名不同，`make-arch.sh` 里有 `uname -m → NODE_ARCH/PKG_ARCH` 双映射表。
+
+另一个不显然的坑：`cp -a` 会保留源目录的 perm。如果开发机的 umask 是 077/027，`task build` 产出的 `out/relay-linux-<arch>/` 顶层是 700，拷进 `$pkgdir/opt/relay/` 后同样是 700——desktop launcher 走 `/usr/bin/relay → /opt/relay/relay` 时 traversal 失败，KDE/GNOME 弹“无法找到程序 'relay'”。`make-arch.sh` 在 cp 后加了 `chmod -R a+rX`，顺序必须在 `chmod 4755 chrome-sandbox` 之前——否则 setuid 位被递归 chmod 清掉。
 
 ## 依赖策略
 
